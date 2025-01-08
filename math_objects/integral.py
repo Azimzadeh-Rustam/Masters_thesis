@@ -1,5 +1,4 @@
 class Integral:
-
     def __init__(self, function, differential, limits):
         self.function = function
         self.differential = differential
