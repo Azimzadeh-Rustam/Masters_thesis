@@ -1,18 +1,18 @@
-from math_objects import Integral, Polinom
+from math_objects import Fraction, Integral, Polinom, Simplifier
 
 def main():
-    # function = r"x^2"
-    # differential = r"dx"
-    # limits = (2, -2)
-    # loop_integral = Integral(function, differential, limits)
-    # print(loop_integral.__dict__)
+    simplifier = Simplifier()
 
-    polinom1 = Polinom('QL', 0)
-    polinom2 = Polinom('LQ', 0)
+    expression = Integral(Fraction(Polinom('QL', 'm') + Polinom('LQ', 'n'), '2*PI^2'), r"OMEGA")
 
-    expression = polinom1 + polinom2
-    print(expression)
+    expression = str(expression)
+    print('Start: ' + expression)
 
+    processed_expression = simplifier.simplify_polinom(expression)
+    print('Processed: ' + processed_expression)
+
+
+    input_string = '3*INT{F{dS^Q_mu}{(2*pi)^4}INT{ F{d^4K}{(2*pi)^4}F{d^4L}{(2*pi)^4}F{Q_mu}{K^2*Q^2*L^2*(K-Q)^2*(L-Q)^2*(K_L)^2} }}'
 
 
 if __name__ == '__main__':

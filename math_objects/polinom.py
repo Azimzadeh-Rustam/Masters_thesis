@@ -2,7 +2,7 @@ from .math_object import MathObject
 
 class Polinom(MathObject):
     def __init__(self, angle, index):
-        if not isinstance(index, int) or index < 0:
+        if isinstance(index, int) and index < 0:
             raise ValueError("The index of a polynomial must be a non-negative integer.")
         self.angle = angle
         self.index = index

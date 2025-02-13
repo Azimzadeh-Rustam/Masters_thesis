@@ -1,5 +1,5 @@
 class Integral:
-    def __init__(self, function, differential, limits):
+    def __init__(self, function, differential, limits=None):
         self.function = function
         self.differential = differential
         self.limits = limits
@@ -49,3 +49,15 @@ class Integral:
     @lims.deleter
     def lims(self):
         del self._limits
+
+    def __repr__(self):
+        if self.limits is None:
+            return f"INT({self.function}d{self.differential})"
+
+        return f"INT_{self.limits[0]}^{self.limits[1]}({self.function}d{self.differential})"
+
+    def __str__(self):
+        if self.limits is None:
+            return f"INT({self.function}d{self.differential})"
+
+        return f"INT_{self.limits[0]}^{self.limits[1]}({self.function}d{self.differential})"
