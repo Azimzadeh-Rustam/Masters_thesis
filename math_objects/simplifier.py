@@ -1,4 +1,5 @@
 import re
+from typing import Tuple
 
 class Simplifier:
     def __init__(self):
@@ -21,8 +22,11 @@ class Simplifier:
 
     def simplify(self, input_string: str) -> str:
         input_string = self.clean_string(input_string)
+        print('Input:     ' + input_string)
+        input_string = self.simplify_fractions(input_string)
+        print('Fractions: ' + input_string)
         input_string = self.apply_gaussian_integration(input_string)
-        print('Gauss:  ' + input_string)
+        print('Gauss:     ' + input_string)
         terms = [input_string]
         while any(re.search(r'\(([A-Z])-([A-Z])\)\^2', term) for term in terms):
             expanded_terms = []
@@ -39,19 +43,80 @@ class Simplifier:
                     expanded_terms.append(term)
             terms = expanded_terms
         terms = [self.set_limits(term) for term in terms]
-        return "+".join(terms)
+        input_string = "+".join(terms)
+        print('Decompose: ' + input_string)
+        return input_string
+
 
     def clean_string(self, input_string: str) -> str:
         return "".join(input_string.split())
 
+
+    def separate_constants(self, factors: list[str]) -> Tuple[list[str], list[str]]:
+        """
+        Разделяет множители на числовые/константные и переменные.
+        """
+        constants = []
+        variables = []
+
+        for factor in factors:
+            if re.match(r'^[0-9PI\^\(\)]+$', factor):  # Константы типа '2', 'PI', '2*PI^4'
+                constants.append(factor)
+            else:  # Остальные множители считаются переменными
+                variables.append(factor)
+        return constants, variables
+
+
+    def simplify_fractions(self, input_string: str) -> str:
+        gauss_integral_pattern = re.compile(r'INT#\{F\{(.*)(dS\^\{[A-Z]\}_\{mu\})([^}]*)\}\{([^}]+)\}\}')
+        gauss_integral_match = gauss_integral_pattern.search(input_string)
+
+        numerator_multiplier1 = gauss_integral_match.group(1)
+        numerator_multiplier2 = gauss_integral_match.group(3)
+        denominator = gauss_integral_match.group(4)
+
+        if numerator_multiplier1 or numerator_multiplier2 or denominator:
+            fraction = 'F{' + numerator_multiplier1 + numerator_multiplier2 + '}{' + denominator + '}'
+            modified_expression = 'INT#{' + gauss_integral_match.group(2) + '}'
+            input_string = gauss_integral_pattern.sub(modified_expression, input_string)
+            input_string = f'{fraction}*{input_string}'
+        return input_string
+        #def process_fraction(match: re.Match) -> str:
+        #    numerator, denominator = match.groups()
+        #
+        #    # Разделяем числитель и знаменатель на множители
+        #    numerator_multipliers = numerator.split('*')
+        #    denominator_multipliers = denominator.split('*')
+        #
+        #    # Фильтруем числовые и буквенные множители
+        #    numerator_constants, numerator_variables = self.separate_constants(numerator_multipliers)
+        #    denominator_constants, denominator_variables = self.separate_constants(denominator_multipliers)
+        #
+        #    # Формируем обновленную строку с вынесенными множителями
+        #    const_part = f"F{{{''.join(numerator_constants)}}}{{{''.join(denominator_constants)}}}" if numerator_constants or denominator_constants else ""
+        #    var_part = f"F{{{'*'.join(numerator_variables)}}}{{{'*'.join(denominator_variables)}}}" if numerator_variables or denominator_variables else ""
+        #
+        #    # Формируем итоговую строку
+        #    if const_part and var_part:
+        #        return f"{const_part}*{var_part}"
+        #    return const_part or var_part
+        #
+        #fraction_pattern = re.compile(r'F\{([^}]*)\}\{([^}]*)\}')
+
+        # Замена всех найденных дробей с использованием process_fraction
+        #result = fraction_pattern.sub(process_fraction, input_string)
+        #return result
+
+
     def apply_gaussian_integration(self, input_string: str) -> str:
         #pulse_pattern = re.compile(r'(F\{.*?)([A-Z]_\{mu\})(.*?\}\{.*?\})')
-        pulse_pattern = re.compile(r'(F\{[^F]*)([A-Z]_\{mu\})([^}]*\}\{.*?[^}]+\})')
+        pulse_pattern = re.compile(r'(F\{[^F]*)([A-Z])_\{mu\}([^}]*\}\{.*?[^}]+\})')
 
         pulse_match = pulse_pattern.search(input_string)
         if pulse_match:
             pulse = pulse_match.group(2)
-            integral_pattern = re.compile(fr'INT#\{{dS\^\{{{pulse}\}}\}}')
+            #integral_pattern = re.compile(fr'INT#\{{dS\^\{{{pulse}\}}\}}')
+            integral_pattern = re.compile(rf'INT#\{{dS\^\{{{pulse}\}}_\{{mu\}}\}}')
             integral_match = integral_pattern.search(input_string)
             if integral_match:
                 # remove pulse from denominator
