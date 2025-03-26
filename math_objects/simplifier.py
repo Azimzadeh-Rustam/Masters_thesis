@@ -27,6 +27,8 @@ class Simplifier:
         terms = [self.set_limits(term) for term in terms]
         terms = [term for term in terms if term] # remove empty string elements
         print(f'Limits        : {"+".join(terms)}')
+        terms = [self.integrate_polinoms(term) for term in terms]
+        print(f'Polinoms      : {"+".join(terms)}')
         return input_string
 
 
@@ -206,24 +208,88 @@ class Simplifier:
         return terms
 
 
-    def simplify_polinom(self, expression: str) -> str:
-        search_pattern = re.compile(
-            r'INT\(F\(C_(\w+)\(([A-Z])([A-Z])\)C_(\w+)\(([A-Z])([A-Z])\)\)\(2\*PI\^2\)dOMEGA\)'
-        )
+    def integrate_polinoms(self, expression: str) -> str:
+        polynomial_pattern = re.compile(r'C_([a-z])\(([A-Z])([A-Z])\)')
 
-        def create_replacement(match):
-            index1 = match.group(1)
-            pulse1 = match.group(2)
-            pulse2 = match.group(3)
-            index2 = match.group(4)
-            pulse3 = match.group(5)
-            pulse4 = match.group(6)
+        # Взятие интеграла по двум разным полиномам Чебышева
+        while True:
+            polynomials = re.findall(polynomial_pattern, expression)
+            found = False
 
-            if {pulse1, pulse2} == {pulse3, pulse4}:
-                return f'delta_{index1}{index2}'
-            return match.group(0)
+            for (index1, pulse11, pulse12) in polynomials:
+                for (index2, pulse21, pulse22) in polynomials:
+                    if index1 == index2:
+                        continue
+                    if {pulse11, pulse12} == {pulse21, pulse22}:
+                        continue
+                    polynomial_pulses_1 = {pulse11, pulse12}
+                    polynomial_pulses_2 = {pulse21, pulse22}
+                    common_pulse = polynomial_pulses_1.intersection(polynomial_pulses_2)
+                    if common_pulse:
+                        common_pulse = common_pulse.pop()
+                        angle_pattern = re.compile(rf'INT{{dG_{common_pulse}}}')
+                        if re.search(angle_pattern, expression):
+                            unique_pulses_in_polynomial1 = (polynomial_pulses_1 - polynomial_pulses_2).pop()
+                            unique_pulses_in_polynomial2 = (polynomial_pulses_2 - polynomial_pulses_1).pop()
+                            replacement = f'F{{}}{{{index2}+1}}*DELTA_{index1}{index2}*C_{index2}({unique_pulses_in_polynomial1}{unique_pulses_in_polynomial2})'
 
-        return re.sub(search_pattern, create_replacement, expression)
+                            expression = re.sub(angle_pattern, '', expression, 1)
+                            expression = re.sub(rf'C_{index1}\({pulse11}{pulse12}\)', '', expression, 1)
+                            expression = re.sub(rf'C_{index2}\({pulse21}{pulse22}\)', replacement, expression, 1)
+                            expression = '2*PI^2*' + expression
+                            found = True
+                            break
+                if found:
+                    break
+            if not found:
+                break
+
+        # Взятие интеграла по двум одинаковым полиномам Чебышева
+        while True:
+            polynomials = re.findall(polynomial_pattern, expression)
+            found = False
+
+            for (index1, pulse11, pulse12) in polynomials:
+                for (index2, pulse21, pulse22) in polynomials:
+                    if index1 == index2:
+                        continue
+                    if {pulse11, pulse12} == {pulse21, pulse22}:
+                        angle_pattern = re.compile(rf'INT{{dG_[{pulse11}{pulse12}]}}')
+                        if re.search(angle_pattern, expression):
+                            replacement = f'DELTA_{index1}{index2}'
+
+                            expression = re.sub(angle_pattern, '', expression, 1)
+                            expression = re.sub(rf'C_{index1}\({pulse11}{pulse12}\)', '', expression, 1)
+                            expression = re.sub(rf'C_{index2}\({pulse21}{pulse22}\)', replacement, expression, 1)
+                            expression = '2*PI^2*' + expression
+                            found = True
+                            break
+                if found:
+                    break
+            if not found:
+                break
+
+        # Поиск одиночных полиномов C_n(XY), интегрируемых как DELTA_n0
+        while True:
+            polynomial_match = re.search(polynomial_pattern, expression)
+            if not polynomial_match:
+                break
+            index, pulse1, pulse2 = polynomial_match.groups()
+            angle_pattern = re.compile(rf'INT{{dG_[{pulse1}{pulse2}]}}')
+            if re.search(angle_pattern, expression):
+                replacement = f'DELTA_{index}0'
+
+                expression = re.sub(angle_pattern, '', expression, 1)
+                expression = re.sub(rf'C_{index}\({pulse1}{pulse2}\)', replacement, expression, 1)
+                expression = '2*PI^2*' + expression
+            else:
+                break
+
+        return expression
+
+
+    def delta_convolution(self, input_expression):
+        pass
 
 
     def split_terms(self, input_string: str):
