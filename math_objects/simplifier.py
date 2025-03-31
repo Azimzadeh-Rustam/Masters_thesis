@@ -23,12 +23,15 @@ class Simplifier:
         print(f'Gauss         : {input_string}')
         terms = self.expand_into_hyperspherical_functions(input_string)
         print(f'Hyperspherical: {"+".join(terms)}')
-        #terms = [self.redistribute_terms_to_integrals(term) for term in terms]
         terms = [self.set_limits(term) for term in terms]
         terms = [term for term in terms if term] # remove empty string elements
         print(f'Limits        : {"+".join(terms)}')
         terms = [self.integrate_polinoms(term) for term in terms]
         print(f'Polinoms      : {"+".join(terms)}')
+        terms = [self.delta_convolution(term) for term in terms]
+        print(f'Delta conv.   : {"+".join(terms)}')
+        terms = [self.redistribute_terms_to_integrals(term) for term in terms]
+        print(f'Redistribution: {"+".join(terms)}')
         return input_string
 
 
@@ -289,7 +292,22 @@ class Simplifier:
 
 
     def delta_convolution(self, input_expression):
-        pass
+        sum_pattern = re.compile(r'SUM\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}')
+        delta_pattern = re.compile(r'DELTA_[a-z][0a-z]')
+
+        def process_sum(match):
+            sum_content = match.group(1)
+            return sum_content
+
+        while True:
+            sum_match = re.search(sum_pattern, input_expression)
+            delta_match = re.search(delta_pattern, input_expression)
+            if not sum_match or not delta_match:
+                break
+            input_expression = re.sub(delta_pattern, '', input_expression, 1)
+            input_expression = re.sub(sum_pattern, process_sum, input_expression, 1)
+
+        return input_expression
 
 
     def split_terms(self, input_string: str):
@@ -297,14 +315,12 @@ class Simplifier:
 
 
     def redistribute_terms_to_integrals(self, input_string: str):
-        diff_var = 'K'
+        diff = 'K'
         integral_search_pattern = re.compile(
-            rf'INT{{(.*)d{diff_var}\*{diff_var}\^3\*INT{{dG_{diff_var}}}(.*)}}'
+            rf'INT_[0A-Z]\^[A-Z]{{(.*?)d{diff}\*{diff}\^3(.*?)}}'
         )
-        match = re.search(integral_search_pattern, input_string)
-        part1, part2 = match.groups()
-        print(part1)
-        print(part2)
+        integral_match = re.search(integral_search_pattern, input_string)
+        print(integral_match)
         return input_string
 
 
@@ -327,26 +343,27 @@ class Simplifier:
                 pulse_sequence.append(numerator)
 
         ############### FIRST PULSE
+        diff_pulse = pulse_sequence[1]
+        integral_search_pattern = re.compile(
+            rf'INT\{{d{diff_pulse}\*{diff_pulse}\^3\*([^{{}}]*(?:\{{[^{{}}]*\}}[^{{}}]*)*)\}}'
+        )
+        match = re.search(integral_search_pattern, input_string)
+        if match:
+            upper_limit = pulse_sequence[0]
+            lower_limit = '0'
+            definite_integral = f'INT_{lower_limit}^{upper_limit}{{d{diff_pulse}*{diff_pulse}^3*{match.group(1)}}}'
+            input_string = re.sub(integral_search_pattern, definite_integral, input_string)
+
+        ############### SECOND PULSE
         diff_pulse = pulse_sequence[2]
         integral_search_pattern = re.compile(
-            rf'INT{{(.*?)d{diff_pulse}(.*)}}'
+            rf'INT\{{d{diff_pulse}\*{diff_pulse}\^3\*([^{{}}]*(?:\{{[^{{}}]*\}}[^{{}}]*)*)\}}'
         )
         match = re.search(integral_search_pattern, input_string)
         if match:
             upper_limit = pulse_sequence[1]
             lower_limit = '0'
-            definite_integral = f'INT_{lower_limit}^{upper_limit}{{{match.group(1)}d{diff_pulse}{match.group(2)}}}'
-            input_string = re.sub(integral_search_pattern, definite_integral, input_string)
-
-        ############### SECOND PULSE
-        diff_pulse = pulse_sequence[1]
-        integral_search_pattern = re.compile(
-            rf'INT{{(.*)d{diff_pulse}(.*)}}'
-        )
-        if match:
-            upper_limit = pulse_sequence[0]
-            lower_limit = '0'
-            definite_integral = f'INT_{lower_limit}^{upper_limit}{{{match.group(1)}d{diff_pulse}{match.group(2)}}}'
+            definite_integral = f'INT_{lower_limit}^{upper_limit}{{d{diff_pulse}*{diff_pulse}^3*{match.group(1)}}}'
             input_string = re.sub(integral_search_pattern, definite_integral, input_string)
 
         return input_string
