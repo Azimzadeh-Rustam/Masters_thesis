@@ -1,7 +1,9 @@
 import re
+from dataclasses import replace
 from typing import Tuple
-
+from collections import defaultdict
 from torch.distributed import group
+import sympy as sp
 
 
 class Simplifier:
@@ -27,11 +29,32 @@ class Simplifier:
         terms = [term for term in terms if term] # remove empty string elements
         print(f'Limits        : {"+".join(terms)}')
         terms = [self.integrate_polinoms(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
         print(f'Polinoms      : {"+".join(terms)}')
         terms = [self.delta_convolution(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
         print(f'Delta conv.   : {"+".join(terms)}')
+        terms = [self.decompose_fractions(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
+        print(f'Decompose frac: {"+".join(terms)}')
+        terms = [self.simplify_fractions(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
+        print(f'Simplify frac : {"+".join(terms)}')
+        terms = [self.unify_powers(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
+        print(f'Unify powers  : {"+".join(terms)}')
         terms = [self.redistribute_terms_to_integrals(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
         print(f'Redistribution: {"+".join(terms)}')
+        terms = [self.integrate(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
+        print(f'Integrate     : {"+".join(terms)}')
+        terms = [self.simplify_fractions(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
+        print(f'Simplify frac : {"+".join(terms)}')
+        terms = [self.take_dzetta(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
+        print(f'Dzetta func   : {"+".join(terms)}')
         return input_string
 
 
@@ -145,6 +168,19 @@ class Simplifier:
             combined_fraction = f'F{{}}{{{combined_denominator}}}'
         ######################## PUSHING CONSTANTS TO THE BEGINNING OF THE EXPRESSION #########################
         input_string = f'{combined_fraction}*{input_string}'
+        return input_string
+
+
+    def clean_stars(self, input_string: str) -> str:
+        # 1. Заменяем подряд идущие звёздочки на одну
+        input_string = re.sub(r'\*{2,}', '*', input_string)
+
+        # 2. Удаляем звёздочку после {
+        input_string = re.sub(r'\{\*', '{', input_string)
+
+        # 3. Удаляем звёздочку перед }
+        input_string = re.sub(r'\*\}', '}', input_string)
+
         return input_string
 
 
@@ -314,13 +350,270 @@ class Simplifier:
         return input_string.split("+")
 
 
-    def redistribute_terms_to_integrals(self, input_string: str):
-        diff = 'K'
-        integral_search_pattern = re.compile(
-            rf'INT_[0A-Z]\^[A-Z]{{(.*?)d{diff}\*{diff}\^3(.*?)}}'
+    def decompose_fractions(self, input_string: str):
+        fraction_pattern = re.compile(r'\(F\{([A-Z])\}\{([A-Z])\}\)\^([a-z])')
+        while match:=re.search(fraction_pattern, input_string):
+            pulse1 = match.group(1)
+            pulse2 = match.group(2)
+            power = match.group(3)
+            replacement = f'{pulse1}^{power}*{pulse2}^-{power}'
+            input_string = re.sub(re.escape(match.group(0)), replacement, input_string, count=1)
+        return input_string
+
+
+    def simplify_fractions(self, input_string: str):
+        fraction_pattern = re.compile(r'F\{(.*?)\}\{(.*?)\}')
+
+        # уточнить что перед и после этих выражений не может стоять знак плюс либо минус
+        factors_pattern = re.compile(
+            r'\([^\(\)]+\)(?:\^\-?\d+)?'
+            r'|[A-Z]\^\{\d+\*n[\+\-]\d+\}'
+            r'|[A-Z](?:\^\-?\d+)?'
+            r'|^\+\d+(?:\^\-?\d+)?' 
+            r'|PI(?:\^\d+)?'
+            r'|\d+\*n[\+\-]\d+'
         )
-        integral_match = re.search(integral_search_pattern, input_string)
-        print(integral_match)
+
+        def process_fraction(match):
+            numerator = match.group(1).strip()
+            denominator = match.group(2).strip()
+
+            processed_factors = []
+            factors_num = factors_pattern.findall(numerator)
+            if factors_num:
+                for factor in factors_num:
+                    factor = factor.strip()
+                    if not factor:
+                        continue
+                    processed_factors.append(factor)
+
+            factors_den = factors_pattern.findall(denominator)
+            if factors_den:
+                for factor in factors_den:
+                    factor = factor.strip()
+                    if not factor:
+                        continue
+                    if '^' in factor:
+                        base, power = factor.split('^', 1)
+                        #new_power = f'-{{{power}}}' if len(power) > 1 else f'-{power}'
+                        new_power = f'-{power}'
+                        processed_factors.append(f'{base}^{new_power}')
+                    else:
+                        if len(factor) > 1:
+                            processed_factors.append(f'{{{factor}}}^-1')
+                        else:
+                            processed_factors.append(f'{factor}^-1')
+            return '*'.join(processed_factors)
+
+        input_string = fraction_pattern.sub(process_fraction, input_string)
+
+        return input_string
+
+
+    def unify_powers(self, input_string: str) -> str:
+        pulse_pattern = re.compile(r'([A-Z])\^(-?[a-z])')
+        matches = re.findall(pulse_pattern, input_string)
+        if matches:
+            for pulse, power in matches:
+                search = re.compile(rf'{pulse}\^{power}')
+                if power.startswith('-'):
+                    replacement = f'{pulse}^-n'
+                else:
+                    replacement = f'{pulse}^n'
+                input_string = re.sub(search, replacement, input_string)
+        return input_string
+
+
+    #def unify_powers(self, input_string: str) -> str:
+    #    pulse_pattern = re.compile(r'([A-Z])\^(-?[a-z])')
+    #    matches = re.findall(pulse_pattern, input_string)
+    #    if matches:
+    #        unique_pulses = list()
+    #        unique_pulses.append(matches[0][0])
+    #        for pulse, _ in matches:
+    #            if pulse not in unique_pulses:
+    #                unique_pulses.append(pulse)
+    #
+    #        for unique_pulse in unique_pulses:
+    #            unique_pulse_powers = list()
+    #            is_negative_power = list()
+    #            for pulse, power in matches:
+    #                if unique_pulse == pulse:
+    #                    if power.startswith('-'):
+    #                        is_negative_power.append(True)
+    #                        power = power.lstrip('-')
+    #                    else:
+    #                        is_negative_power.append(False)
+    #                    if power not in unique_pulse_powers:
+    #                        unique_pulse_powers.append(power)
+    #
+    #            if len(unique_pulse_powers) > 1:
+    #                for number, unique_pulse_power in enumerate(unique_pulse_powers):
+    #                    if is_negative_power[number]:
+    #                        search = re.compile(rf'{unique_pulse}\^-{unique_pulse_power}')
+    #                        replacement = f'{unique_pulse}^-{unique_pulse_powers[0]}'
+    #                    else:
+    #                        search = re.compile(rf'{unique_pulse}\^{unique_pulse_power}')
+    #                        replacement = f'{unique_pulse}^{unique_pulse_powers[0]}'
+    #                    input_string = re.sub(search, replacement, input_string)
+    #    return input_string
+
+
+    def redistribute_terms_to_integrals(self, input_string: str):
+        DIFFS = ['Q', 'K', 'L']
+        for diff in DIFFS:
+            # Шаблон для поиска одного интеграла
+            integral_search_pattern = re.compile(
+                rf'(INT_[0A-Z]\^[A-Z]){{d{diff}\*{diff}\^3}}'
+            )
+            integral_match = re.search(integral_search_pattern, input_string)
+
+            if integral_match:
+                integral = integral_match.group(0)
+                variable_pattern = re.compile(rf'(?<!d)(?<!\^)(?<!_){diff}\^?([-\da-z]+)?')
+                variable_matches = re.findall(variable_pattern, input_string)
+                if variable_matches:
+                    powers = [sp.sympify(power) for power in variable_matches]
+                    total_power = sp.Add(*powers)
+                    total_power = str(total_power).strip().replace(' ', '')
+                    total_power = f'{{{total_power}}}'
+
+                    # Удаляем импульсы
+                    input_string = re.sub(variable_pattern, '', input_string)
+
+                    # Формируем итоговый импульс
+                    final_pulse = f"{diff}^{total_power}" if total_power else diff
+                    replacement = f'{integral_match.group(1)}{{{final_pulse}*d{diff}}}'
+                    # Заменяем интеграл
+                    integral_pattern_replace = re.compile(
+                        rf'(INT_[0A-Z]\^[A-Z]){{d{diff}\*}}'
+                    )
+                    input_string = re.sub(integral_pattern_replace, replacement, input_string, count=1)
+
+        return input_string
+
+
+    def redistribute_terms_to_integrals2(self, input_string: str):
+        DIFFS = ['Q', 'K', 'L']
+        for diff in DIFFS:
+            integral_search_pattern = re.compile(
+                rf'(INT_[0A-Z]\^[A-Z]){{(.*?)\*d{diff}}}'
+            )
+            integral_match = re.search(integral_search_pattern, input_string)
+            if integral_match:
+                integral = integral_match.group(0)
+                variable_pattern = re.compile(rf'(?<!d)(?<!\^)(?<!_){diff}\^?{{?(-?\d*\*?n(?:[+-]\d+)?|-?\d+|[a-z])?}}?')
+                variable_matches = re.findall(variable_pattern, input_string)
+                if variable_matches:
+                    powers = [sp.sympify(power) for power in variable_matches]
+                    total_power = sp.Add(*powers)
+                    total_power = str(total_power).strip().replace(' ', '')
+                    total_power = f'{{{total_power}}}'
+                    # Удаляем импульсы
+                    input_string = re.sub(variable_pattern, '', input_string)
+                    # Формируем итоговый импульс
+                    final_pulse = f"{diff}^{total_power}" if total_power else diff
+                    replacement = f'{integral_match.group(1)}{{{final_pulse}*d{diff}}}'
+                    # Заменяем интеграл
+                    integral_pattern_replace = re.compile(
+                        rf'(INT_[0A-Z]\^[A-Z]){{\*d{diff}}}'
+                    )
+                    input_string = re.sub(integral_pattern_replace, replacement, input_string, count=1)
+        return input_string
+
+
+    def process_single_integral(self, integral_match, input_string: str) -> str:
+        integral_var = integral_match.group(0).strip()
+        lower_limit_var = integral_match.group(1).strip()
+        upper_limit_var = integral_match.group(2).strip()
+        pulse_var = integral_match.group(3).strip()
+        power_var = integral_match.group(4).strip() if integral_match.group(4) else '1'
+        diff_var = integral_match.group(5).strip()
+
+        try:
+            var_names = set(re.findall(r'\b[A-Za-z_][A-Za-z0-9_]*\b',
+                                       f"{lower_limit_var} {upper_limit_var} {power_var} {diff_var}"))
+            local_syms = {name: sp.Symbol(name, real=True, positive=True) for name in var_names}
+
+            diff_sym = local_syms[diff_var]
+            power_sym = sp.sympify(str(power_var), locals=local_syms)
+            lower_limit_sym = sp.sympify(str(lower_limit_var), locals=local_syms)
+            upper_limit_sym = sp.sympify(str(upper_limit_var), locals=local_syms)
+
+            integrand = diff_sym ** power_sym
+
+            result = sp.integrate( integrand, (diff_sym, lower_limit_sym, upper_limit_sym), risch=False)
+            result = sp.simplify(result)
+            result = sp.expand(result, deep=True)
+            result = sp.simplify(result)
+
+            if isinstance(result, sp.Piecewise):
+                result = result.args[0][0]
+                result = sp.expand(result, deep=True)
+
+            if isinstance(result, sp.Add):
+                terms = result.as_ordered_terms()
+                terms = [str(sp.simplify(term)) for term in terms]
+                cleaned_terms = []
+                for term in terms:
+                    term = re.sub(r'-?0\*\*\(.*?\)', '0', term)
+                    term = sp.simplify(term)
+                    cleaned_terms.append(term)
+                result = sum(cleaned_terms)
+                result = sp.simplify(result)
+
+            # Представим как дробь
+            num, den = sp.fraction(result)
+            num = sp.simplify(num)
+            den = sp.simplify(den)
+
+            num = str(num).replace(' ', '')
+            den = str(den).replace(' ', '')
+
+            power_pattern = re.compile(r'([A-Z])\*\*\(([^()]+)\)')
+            num = re.sub(power_pattern, r'\1^{\2}', num)
+            den = re.sub(power_pattern, r'\1^{\2}', den)
+            output = None
+            if den == '1':
+                output = num
+            else:
+                output = f'F{{{num}}}{{{den}}}'
+            input_string = input_string.replace(integral_var, output, 1)
+        except Exception as e:
+            print(f"[ERROR] during integration {repr(integral_var)}:")
+            print(f"    Exception: {e}")
+        return input_string
+
+
+    def integrate(self, input_string: str) -> str:
+        integral_pattern = re.compile(
+            r'INT_([0A-Z])\^([A-Z])\{([A-Z])\^?(?:\{(.*?)\})\*d([A-Z])\}'
+        )
+
+        matches = list(re.finditer(integral_pattern, input_string))
+
+        integral_match1 = matches[0]
+        diff1 = integral_match1.group(5)
+        pulse1 = integral_match1.group(3)
+        upper_limit1 = integral_match1.group(2)
+
+        integral_match2 = matches[1]
+        diff2 = integral_match2.group(5)
+        pulse2 = integral_match2.group(3)
+        upper_limit2 = integral_match2.group(2)
+
+        if upper_limit2 == diff1:
+            input_string = self.process_single_integral(integral_match=integral_match2, input_string=input_string)
+            input_string = self.simplify_fractions(input_string)
+            input_string = self.redistribute_terms_to_integrals2(input_string)
+            matches_new = list(re.finditer(integral_pattern, input_string))
+            input_string = self.process_single_integral(integral_match=matches_new[0], input_string=input_string)
+        else:
+            input_string = self.process_single_integral(integral_match=integral_match1, input_string=input_string)
+            input_string = self.simplify_fractions(input_string)
+            input_string = self.redistribute_terms_to_integrals2(input_string)
+            matches_new = list(re.finditer(integral_pattern, input_string))
+            input_string = self.process_single_integral(integral_match=matches_new[0], input_string=input_string)
         return input_string
 
 
@@ -366,4 +659,7 @@ class Simplifier:
             definite_integral = f'INT_{lower_limit}^{upper_limit}{{d{diff_pulse}*{diff_pulse}^3*{match.group(1)}}}'
             input_string = re.sub(integral_search_pattern, definite_integral, input_string)
 
+        return input_string
+
+    def take_dzetta(self, input_string: str) -> str:
         return input_string
