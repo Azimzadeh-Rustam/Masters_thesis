@@ -2,6 +2,8 @@ import re
 from dataclasses import replace
 from typing import Tuple
 from collections import defaultdict
+
+from pasta.base.annotate import expression
 from torch.distributed import group
 import sympy as sp
 
@@ -40,7 +42,7 @@ class Simplifier:
         terms = [self.simplify_fractions(term) for term in terms]
         terms = [self.clean_stars(term) for term in terms]
         print(f'Simplify frac : {"+".join(terms)}')
-        terms = [self.unify_powers(term) for term in terms]
+        terms = [self.unify_indices(term) for term in terms]
         terms = [self.clean_stars(term) for term in terms]
         print(f'Unify powers  : {"+".join(terms)}')
         terms = [self.redistribute_terms_to_integrals(term) for term in terms]
@@ -52,9 +54,20 @@ class Simplifier:
         terms = [self.simplify_fractions(term) for term in terms]
         terms = [self.clean_stars(term) for term in terms]
         print(f'Simplify frac : {"+".join(terms)}')
+        terms = [self.extract_common_factors_in_denominators(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
+        print(f'Extract common: {"+".join(terms)}')
+        terms = [self.combine_integral_residuals(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
+        print(f'Combine resid : {"+".join(terms)}')
+        terms = [self.unify_powers(term) for term in terms]
+        terms = [self.clean_stars(term) for term in terms]
+        print(f'Unify powers  : {"+".join(terms)}')
         terms = [self.take_dzetta(term) for term in terms]
         terms = [self.clean_stars(term) for term in terms]
         print(f'Dzetta func   : {"+".join(terms)}')
+
+
         return input_string
 
 
@@ -180,6 +193,12 @@ class Simplifier:
 
         # 3. Удаляем звёздочку перед }
         input_string = re.sub(r'\*\}', '}', input_string)
+
+        # 4. Удаляем звёздочку перед +
+        input_string = re.sub(r'\*\+', '+', input_string)
+
+        # 5. Удаляем звёздочку после +
+        input_string = re.sub(r'\+\*', '+', input_string)
 
         return input_string
 
@@ -371,7 +390,7 @@ class Simplifier:
             r'|[A-Z](?:\^\-?\d+)?'
             r'|^\+\d+(?:\^\-?\d+)?' 
             r'|PI(?:\^\d+)?'
-            r'|\d+\*n[\+\-]\d+'
+            r'|(?:\d+\*)?[a-z][\+\-]\d+'
         )
 
         def process_fraction(match):
@@ -410,7 +429,7 @@ class Simplifier:
         return input_string
 
 
-    def unify_powers(self, input_string: str) -> str:
+    def unify_indices(self, input_string: str) -> str:
         pulse_pattern = re.compile(r'([A-Z])\^(-?[a-z])')
         matches = re.findall(pulse_pattern, input_string)
         if matches:
@@ -421,42 +440,40 @@ class Simplifier:
                 else:
                     replacement = f'{pulse}^n'
                 input_string = re.sub(search, replacement, input_string)
+
+        # тот же индекс
+        expression_pattern = re.compile(r'(\d+\*)?[a-z]([\+\-]\d+)')
+        def replace_index(match):
+            coeff = match.group(1) or ''
+            return f'{coeff}n{match.group(2)}'
+        input_string = re.sub(expression_pattern, replace_index, input_string)
         return input_string
 
 
-    #def unify_powers(self, input_string: str) -> str:
-    #    pulse_pattern = re.compile(r'([A-Z])\^(-?[a-z])')
-    #    matches = re.findall(pulse_pattern, input_string)
-    #    if matches:
-    #        unique_pulses = list()
-    #        unique_pulses.append(matches[0][0])
-    #        for pulse, _ in matches:
-    #            if pulse not in unique_pulses:
-    #                unique_pulses.append(pulse)
-    #
-    #        for unique_pulse in unique_pulses:
-    #            unique_pulse_powers = list()
-    #            is_negative_power = list()
-    #            for pulse, power in matches:
-    #                if unique_pulse == pulse:
-    #                    if power.startswith('-'):
-    #                        is_negative_power.append(True)
-    #                        power = power.lstrip('-')
-    #                    else:
-    #                        is_negative_power.append(False)
-    #                    if power not in unique_pulse_powers:
-    #                        unique_pulse_powers.append(power)
-    #
-    #            if len(unique_pulse_powers) > 1:
-    #                for number, unique_pulse_power in enumerate(unique_pulse_powers):
-    #                    if is_negative_power[number]:
-    #                        search = re.compile(rf'{unique_pulse}\^-{unique_pulse_power}')
-    #                        replacement = f'{unique_pulse}^-{unique_pulse_powers[0]}'
-    #                    else:
-    #                        search = re.compile(rf'{unique_pulse}\^{unique_pulse_power}')
-    #                        replacement = f'{unique_pulse}^{unique_pulse_powers[0]}'
-    #                    input_string = re.sub(search, replacement, input_string)
-    #    return input_string
+    def unify_powers(self, input_string: str) -> str:
+        DIFFS = ['Q', 'K', 'L']
+        for diff in DIFFS:
+            variable_pattern = re.compile(rf'(?<!d)(?<!\^)(?<!_){diff}\^{{([^{{}}]+)}}'
+                                          rf'|(?<!d)(?<!\^)(?<!_){diff}\^?([-\da-z]+)?')
+            variable_matches = re.findall(variable_pattern, input_string)
+            powers = []
+            for p1, p2 in variable_matches:
+                if p1:
+                    powers.append(p1)
+                if p2:
+                    powers.append(p2)
+
+            if powers:
+                powers = [sp.sympify(power) for power in powers]
+                total_power = sp.Add(*powers)
+                combined_expression = sp.Symbol(diff) ** total_power
+                combined_expression = str(combined_expression).strip().replace(' ', '')
+
+                if combined_expression != '1':
+                    input_string = f'{combined_expression}*{input_string}'
+
+                input_string = re.sub(variable_pattern, '', input_string)
+        return input_string
 
 
     def redistribute_terms_to_integrals(self, input_string: str):
@@ -661,5 +678,86 @@ class Simplifier:
 
         return input_string
 
+
+    def extract_common_factors_in_denominators(self, input_string: str) -> str:
+        pattern = re.compile(r'\{((?:\d+\*)?[a-z][\+\-]\d+)\}\^\-1')
+        n = sp.symbols('n')
+
+        def replace(match):
+            denominator = match.group(1)
+            try:
+                parsed_denominator = sp.sympify(denominator, evaluate=False)
+                factored = sp.factor(parsed_denominator)
+                coeff, rest = factored.as_coeff_Mul()
+                if coeff != 1:
+                    coeff = str(coeff).strip().replace(' ', '')
+                    rest = str(rest).strip().replace(' ', '')
+                    return f'{coeff}^-1*{{{rest}}}^-1'
+                else:
+                    return match.group(0)
+            except Exception as e:
+                # если не удаётся распарсить, оставляем как есть
+                return match.group(0)
+
+        input_string = re.sub(pattern, replace, input_string)
+        return input_string
+
+
+    def combine_integral_residuals(self, input_string: str) -> str:
+        # Найдём все выражения вида {основание}^{степень}
+        search_pattern = re.compile(r'\{((?:\d+\*)?[a-z][\+\-]\d+)\}\^(-?\d+)')
+        #search_pattern = re.compile(r'\{(\d+?\*?n?[\+\-]?\d+?)\}\^(-?\d+)')
+        matches = search_pattern.findall(input_string)
+
+        powers_dict = defaultdict(int)
+        base_expr_map = {}
+
+        for base_str, power_str in matches:
+            try:
+                base_expr = sp.sympify(base_str, evaluate=False)
+                matched_key = None
+                # Найти уже существующее эквивалентное основание
+                for key in base_expr_map:
+                    if base_expr.equals(key):  # проверка символьной эквивалентности
+                        matched_key = key
+                        break
+                if matched_key is None:
+                    base_expr_map[base_expr] = base_str
+                    matched_key = base_expr
+                powers_dict[matched_key] += int(power_str)
+            except Exception as e:
+                print(f"Ошибка при обработке {base_str}^{power_str}: {e}")
+                continue
+
+        # Удалим все старые степени из строки
+        input_string = search_pattern.sub('', input_string)
+
+        # Добавим объединённые степени
+        new_parts = []
+        for base_expr, total_power in powers_dict.items():
+            if total_power == 0:
+                continue
+            base_str = base_expr_map[base_expr]
+            new_parts.append(f"{{{base_str}}}^{total_power}")
+
+        # Добавим объединённые степени в начало строки
+        for new_part in new_parts:
+            input_string = f'{new_part}*{input_string}' if new_part else input_string
+        return input_string
+
+
     def take_dzetta(self, input_string: str) -> str:
+        patter = re.compile(r'\{n\+1\}\^-(\d+)')
+        patter_match = re.search(patter, input_string)
+
+        sum_patter = re.compile(r'SUM\{\}')
+        sum_match = re.search(sum_patter, input_string)
+
+        if patter_match and sum_match:
+            dzetta_function = f'DZETTA{{{patter_match.group(1)}}}'
+            input_string = f'{dzetta_function}*{input_string}'
+
+            input_string = patter.sub('', input_string)
+            input_string = sum_patter.sub('', input_string)
+
         return input_string
